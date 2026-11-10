@@ -463,6 +463,18 @@
       </div>
 
       
+      <div class="form-group" id="when-box" style="display:none;">
+        <label>Thời gian nhận món:</label>
+        <div style="display:flex;gap:8px;margin-bottom:6px;">
+          <label style="flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px;cursor:pointer;font-weight:bold;"><input type="radio" name="when-mode" id="when-now" value="now" onchange="setWhen('now')"> ⚡ Đặt ngay</label>
+          <label id="when-pre-row" style="flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px;cursor:pointer;font-weight:bold;"><input type="radio" name="when-mode" id="when-pre" value="pre" onchange="setWhen('pre')"> 📅 Đặt trước</label>
+        </div>
+        <div id="pre-pick" style="display:none;gap:8px;">
+          <select id="pre-day" onchange="fillPreTimes()" style="flex:1;padding:8px;"></select>
+          <select id="pre-time" style="flex:1;padding:8px;"></select>
+        </div>
+        <div id="when-note" style="font-size:11px;color:#777;margin-top:4px;"></div>
+      </div>
       <div class="form-group">
         <label>Hình Thức Nhận Hàng & Phí Ship:</label>
         <div class="shipping-methods">
@@ -660,6 +672,73 @@
     }
     function scheduleMenuRender() { clearTimeout(menuRenderTimer); menuRenderTimer = setTimeout(renderCategoriesAndMenu, 80); }
 
+    // ===== GIỜ MỞ CỬA + ĐẶT TRƯỚC =====
+    let SHOP_HOURS = { enabled: true, openMin: 690, closeMin: 1290, preorder: true, maxDays: 2, leadMin: 30, slotMin: 15 }, SERVER_OFFSET = 0;
+    const nowMs = () => Date.now() + SERVER_OFFSET;
+    const vnInfo = ms => { const t = new Date(ms + 25200000); return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate(), min: t.getUTCHours() * 60 + t.getUTCMinutes() }; };   // giờ Việt Nam (UTC+7)
+    const vnDayStart = (y, m, d) => Date.UTC(y, m - 1, d) - 25200000;
+    const hhmm = min => String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0');
+    function isShopOpenNow() { const h = SHOP_HOURS; if (!h.enabled) return true; const m = vnInfo(nowMs()).min; return m >= h.openMin && m < h.closeMin; }
+    function listenShopHours() {
+      try { db.ref('.info/serverTimeOffset').on('value', s => { SERVER_OFFSET = s.val() || 0; renderHoursBanner(); }); } catch (e) {}
+      db.ref('shopHours').on('value', s => { const v = s.val(); if (v && typeof v === 'object') SHOP_HOURS = { ...SHOP_HOURS, ...v }; renderHoursBanner(); }, e => console.warn('Không đọc được shopHours (kiểm tra Rules):', e.message));
+      setInterval(renderHoursBanner, 30000); renderHoursBanner();
+    }
+    function renderHoursBanner() {
+      let b = document.getElementById('hours-banner');
+      if (!b) { const c = document.getElementById('live-clock'); if (!c) return; b = document.createElement('div'); b.id = 'hours-banner'; b.style.cssText = 'margin:6px 8px;padding:8px 10px;border-radius:8px;font-size:13px;font-weight:bold;text-align:center;'; c.insertAdjacentElement('afterend', b); }
+      const h = SHOP_HOURS; if (!h.enabled) { b.style.display = 'none'; return; }
+      b.style.display = 'block'; const range = hhmm(h.openMin) + ' – ' + hhmm(h.closeMin);
+      if (isShopOpenNow()) { b.style.background = '#e6f6ea'; b.style.color = '#1b6b34'; b.innerText = '🟢 Quán đang mở cửa (' + range + '). Khách iu có thể đặt ngay' + (h.preorder ? ' hoặc đặt trước.' : '.'); }
+      else { b.style.background = '#fff0f0'; b.style.color = '#c1121f'; b.innerText = '🔴 Quán đang đóng cửa. Giờ mở cửa: ' + range + '.' + (h.preorder ? ' Khách iu vẫn có thể ĐẶT TRƯỚC.' : ''); }
+    }
+    function preSlots(dayIdx) {
+      const h = SHOP_HOURS, step = Math.max(5, +h.slotMin || 15), lead = +h.leadMin || 0, nowMin = vnInfo(nowMs()).min, out = [];
+      for (let m = h.openMin; m < h.closeMin; m += step) { if (dayIdx === 0 && m < nowMin + lead) continue; out.push(m); }
+      return out;
+    }
+    function setWhen(mode) {
+      document.getElementById('when-now').checked = (mode === 'now'); document.getElementById('when-pre').checked = (mode === 'pre');
+      document.getElementById('pre-pick').style.display = mode === 'pre' ? 'flex' : 'none';
+      if (mode === 'pre') fillPreDays();
+    }
+    function fillPreDays() {
+      const sel = document.getElementById('pre-day'), keep = sel.value; sel.innerHTML = '';
+      for (let i = 0; i <= Math.min(7, +SHOP_HOURS.maxDays || 0); i++) {
+        if (!preSlots(i).length) continue; const inf = vnInfo(nowMs() + i * 86400000);
+        sel.insertAdjacentHTML('beforeend', '<option value="' + i + '">' + (i === 0 ? 'Hôm nay' : i === 1 ? 'Ngày mai' : 'Ngày ' + String(inf.d).padStart(2, '0') + '/' + String(inf.m).padStart(2, '0')) + '</option>');
+      }
+      if (keep && sel.querySelector('option[value="' + keep + '"]')) sel.value = keep; fillPreTimes();
+    }
+    function fillPreTimes() {
+      const di = +document.getElementById('pre-day').value, t = document.getElementById('pre-time'); t.innerHTML = '';
+      preSlots(di).forEach(m => t.insertAdjacentHTML('beforeend', '<option value="' + m + '">' + hhmm(m) + '</option>'));
+    }
+    function initWhenBox() {
+      const h = SHOP_HOURS, box = document.getElementById('when-box'); if (!box) return true;
+      if (!h.enabled) { box.style.display = 'none'; return true; }
+      const open = isShopOpenNow(), canPre = !!h.preorder;
+      if (!open && !canPre) { alert('🔴 Quán đang đóng cửa. Giờ mở cửa: ' + hhmm(h.openMin) + ' – ' + hhmm(h.closeMin) + '. Khách iu quay lại sau nha!'); return false; }
+      box.style.display = 'block'; document.getElementById('when-now').disabled = !open;
+      document.getElementById('when-pre-row').style.display = canPre ? '' : 'none';
+      document.getElementById('when-note').innerText = open ? ('Đặt trước: chọn giờ trong khung ' + hhmm(h.openMin) + ' – ' + hhmm(h.closeMin) + ', cách hiện tại tối thiểu ' + (+h.leadMin || 0) + ' phút.') : 'Quán đang đóng cửa nên chỉ nhận ĐẶT TRƯỚC (giờ hẹn trong khung ' + hhmm(h.openMin) + ' – ' + hhmm(h.closeMin) + ').';
+      setWhen(open ? 'now' : 'pre');
+      if (!open && !document.getElementById('pre-time').options.length) { alert('Hiện chưa còn khung giờ đặt trước phù hợp. Khách iu vui lòng quay lại sau nha!'); return false; }
+      return true;
+    }
+    function whenFields() {
+      if (!SHOP_HOURS.enabled) return { fields: { orderType: 'now' } };
+      if (document.getElementById('when-pre').checked) {
+        const dv = document.getElementById('pre-day').value, tv = document.getElementById('pre-time').value;
+        if (dv === '' || tv === '') return { error: 'Vui lòng chọn ngày và giờ hẹn để đặt trước!' };
+        const inf = vnInfo(nowMs() + (+dv) * 86400000), at = vnDayStart(inf.y, inf.m, inf.d) + (+tv) * 60000;
+        if (at < nowMs() + (+SHOP_HOURS.leadMin || 0) * 60000 - 60000) return { error: 'Giờ hẹn đã qua hoặc quá sát, vui lòng chọn lại giờ khác.' };
+        return { fields: { orderType: 'preorder', pickupAt: at, pickupLabel: hhmm(+tv) + ' · ' + String(inf.d).padStart(2, '0') + '/' + String(inf.m).padStart(2, '0') } };
+      }
+      if (!isShopOpenNow()) return { error: 'Quán đang đóng cửa, vui lòng chọn ĐẶT TRƯỚC.' };
+      return { fields: { orderType: 'now' } };
+    }
+
     function startLiveClock() {
       setInterval(() => {
         const now = new Date();
@@ -696,6 +775,7 @@
       imgRef.on('child_added',   s => { liveImages[s.key] = s.val(); scheduleMenuRender(); }, err => console.warn('Không đọc được shopMenuImages (kiểm tra Rules):', err.message));
       imgRef.on('child_changed', s => { liveImages[s.key] = s.val(); scheduleMenuRender(); });
       imgRef.on('child_removed', s => { delete liveImages[s.key]; scheduleMenuRender(); });
+      listenShopHours();
       // Thông báo của quán (nghỉ, đổi giờ, khuyến mãi...)
       db.ref('shopNotice').on('value', snap => { noticeData = snap.val() || {}; renderNotices(); }, err => console.warn('Không đọc được shopNotice (kiểm tra Rules):', err.message));
       // Khuyến mãi realtime từ POS
@@ -1007,6 +1087,7 @@
 
     function openCheckoutModal() { 
       if (ORDER_BLOCK) { showNoticePopup(); return; }   // quán đang nghỉ và chặn đặt món
+      if (!initWhenBox()) return;
       renderCheckoutItems(); 
       selectShipping('pickup');
       selectPayment('QR');
@@ -1021,6 +1102,7 @@
       const phone = document.getElementById('cust-phone').value.trim();
       const address = document.getElementById('cust-address').value.trim();
       const note = document.getElementById('cust-note').value.trim();
+      const wf = whenFields(); if (wf.error) { alert(wf.error); return; }
 
       const needAddress = selectedShippingMethod !== 'pickup';
       if (!name || !phone || (needAddress && !address)) { 
@@ -1057,7 +1139,7 @@
         shipFee: 0,
         status: 'Chờ xử lý',
         time: new Date().toLocaleTimeString('vi-VN') + ' ' + new Date().toLocaleDateString('vi-VN'),
-        timestamp: Date.now()
+        timestamp: nowMs(), ...wf.fields
       };
 
       if (db) {
