@@ -406,7 +406,7 @@
 
   <div class="shop-info-card">
     <div class="shop-info-row">📍 <span><strong>Địa chỉ:</strong> 1043 Tỉnh lộ 10, Tân Tạo, TPHCM</span></div>
-    <div class="shop-info-row">⏰ <span><strong>Giờ mở cửa:</strong> 11h30 - 21h30</span></div>
+    <div class="shop-info-row">⏰ <span><strong>Giờ mở cửa:</strong> <span id="shop-hours-text">11h30 - 21h30</span></span></div>
     <div class="shop-info-row">💳 <span><strong>STK Ngân Hàng:</strong> BIDV - PGD Nguyễn Thị Minh Khai | STK: <strong>1471483232</strong> (NGUYEN THI MY NGOC)</span></div>
   </div>
 
@@ -562,6 +562,7 @@
 
     const fmt = n => (Number(n) || 0).toLocaleString('vi-VN');
     const toArr = x => Array.isArray(x) ? x : Object.values(x || {});
+    function safeImg(s) { s = String(s == null ? '' : s); return /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+\/=]+$/.test(s) ? s : ''; }   // chỉ nhận ảnh data:image, chặn javascript:/link ngoài
     function esc(s) {
       return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
@@ -673,28 +674,49 @@
     function scheduleMenuRender() { clearTimeout(menuRenderTimer); menuRenderTimer = setTimeout(renderCategoriesAndMenu, 80); }
 
     // ===== GIỜ MỞ CỬA + ĐẶT TRƯỚC =====
-    let SHOP_HOURS = { enabled: true, openMin: 690, closeMin: 1290, preorder: true, maxDays: 2, leadMin: 30, slotMin: 15 }, SERVER_OFFSET = 0;
+    let SHOP_HOURS = { enabled: true, openMin: 690, closeMin: 1290, preorder: true, leadMin: 30, slotMin: 15 }, SERVER_OFFSET = 0;
     const nowMs = () => Date.now() + SERVER_OFFSET;
     const vnInfo = ms => { const t = new Date(ms + 25200000); return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate(), min: t.getUTCHours() * 60 + t.getUTCMinutes() }; };   // giờ Việt Nam (UTC+7)
     const vnDayStart = (y, m, d) => Date.UTC(y, m - 1, d) - 25200000;
     const hhmm = min => String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0');
-    function isShopOpenNow() { const h = SHOP_HOURS; if (!h.enabled) return true; const m = vnInfo(nowMs()).min; return m >= h.openMin && m < h.closeMin; }
+    function shopState() {   // 'open' | 'before' (chưa mở cửa) | 'after' (đã đóng cửa)
+      const h = SHOP_HOURS; if (!h.enabled) return 'open';
+      const m = vnInfo(nowMs()).min;
+      return m < h.openMin ? 'before' : (m >= h.closeMin ? 'after' : 'open');
+    }
+    function isShopOpenNow() { return shopState() === 'open'; }
+    function closedMsg(st) {
+      const o = hhmm(SHOP_HOURS.openMin);
+      return st === 'before'
+        ? '🔴 Quán chưa mở cửa.\nKhách iu vui lòng đặt sau ' + o + ' nha!'
+        : '🔴 Quán đã đóng cửa (' + o + ' – ' + hhmm(SHOP_HOURS.closeMin) + ').\nHẹn gặp khách iu lúc ' + o + ' ngày mai nha!';
+    }
+    let _lastShopState = null;
+    function tickHours() { const st = shopState(); renderHoursBanner(); if (_lastShopState !== null && st !== _lastShopState) refreshCheckoutWhen(); _lastShopState = st; }
+    function refreshCheckoutWhen() {   // POS đổi giờ / sang giờ mở-đóng cửa khi khách đang mở form thanh toán -> cập nhật ngay
+      const m = document.getElementById('checkout-modal'); if (!m || m.style.display !== 'flex') return;
+      if (!initWhenBox()) closeCheckoutModal();
+    }
     function listenShopHours() {
       try { db.ref('.info/serverTimeOffset').on('value', s => { SERVER_OFFSET = s.val() || 0; renderHoursBanner(); }); } catch (e) {}
-      db.ref('shopHours').on('value', s => { const v = s.val(); if (v && typeof v === 'object') SHOP_HOURS = { ...SHOP_HOURS, ...v }; renderHoursBanner(); }, e => console.warn('Không đọc được shopHours (kiểm tra Rules):', e.message));
-      setInterval(renderHoursBanner, 30000); renderHoursBanner();
+      db.ref('shopHours').on('value', s => { const v = s.val(); if (v && typeof v === 'object') SHOP_HOURS = { ...SHOP_HOURS, ...v }; renderHoursBanner(); refreshCheckoutWhen(); _lastShopState = shopState(); }, e => console.warn('Không đọc được shopHours (kiểm tra Rules):', e.message));
+      setInterval(tickHours, 30000); renderHoursBanner();
     }
     function renderHoursBanner() {
+      const h = SHOP_HOURS, tx = document.getElementById('shop-hours-text');
+      if (tx) tx.innerText = h.enabled ? hhmm(h.openMin).replace(':', 'h') + ' - ' + hhmm(h.closeMin).replace(':', 'h') : 'Nhận đơn mọi lúc';
       let b = document.getElementById('hours-banner');
       if (!b) { const c = document.getElementById('live-clock'); if (!c) return; b = document.createElement('div'); b.id = 'hours-banner'; b.style.cssText = 'margin:6px 8px;padding:8px 10px;border-radius:8px;font-size:13px;font-weight:bold;text-align:center;'; c.insertAdjacentElement('afterend', b); }
-      const h = SHOP_HOURS; if (!h.enabled) { b.style.display = 'none'; return; }
-      b.style.display = 'block'; const range = hhmm(h.openMin) + ' – ' + hhmm(h.closeMin);
-      if (isShopOpenNow()) { b.style.background = '#e6f6ea'; b.style.color = '#1b6b34'; b.innerText = '🟢 Quán đang mở cửa (' + range + '). Khách iu có thể đặt ngay' + (h.preorder ? ' hoặc đặt trước.' : '.'); }
-      else { b.style.background = '#fff0f0'; b.style.color = '#c1121f'; b.innerText = '🔴 Quán đang đóng cửa. Giờ mở cửa: ' + range + '.' + (h.preorder ? ' Khách iu vẫn có thể ĐẶT TRƯỚC.' : ''); }
+      if (!h.enabled) { b.style.display = 'none'; return; }
+      const st = shopState(), range = hhmm(h.openMin) + ' – ' + hhmm(h.closeMin), canPre = !!h.preorder && preSlots().length > 0;
+      b.style.display = 'block';
+      if (st === 'open') { b.style.background = '#e6f6ea'; b.style.color = '#1b6b34'; b.innerText = '🟢 Quán đang mở cửa (' + range + '). Khách iu có thể đặt ngay' + (canPre ? ' hoặc đặt trước trong hôm nay.' : '.'); }
+      else { b.style.background = '#fff0f0'; b.style.color = '#c1121f'; b.innerText = st === 'before' ? ('🔴 Quán chưa mở cửa. Khách iu vui lòng đặt sau ' + hhmm(h.openMin) + (canPre ? ' hoặc chọn ĐẶT TRƯỚC trong hôm nay.' : '.')) : ('🔴 Quán đã đóng cửa. Hẹn gặp khách iu lúc ' + hhmm(h.openMin) + ' ngày mai nha!'); }
     }
-    function preSlots(dayIdx) {
+    // Đặt trước CHỈ TRONG NGÀY HÔM NAY: các khung giờ còn lại trong giờ mở cửa, cách hiện tại tối thiểu leadMin phút
+    function preSlots() {
       const h = SHOP_HOURS, step = Math.max(5, +h.slotMin || 15), lead = +h.leadMin || 0, nowMin = vnInfo(nowMs()).min, out = [];
-      for (let m = h.openMin; m < h.closeMin; m += step) { if (dayIdx === 0 && m < nowMin + lead) continue; out.push(m); }
+      for (let m = h.openMin; m < h.closeMin; m += step) { if (m >= nowMin + lead) out.push(m); }
       return out;
     }
     function setWhen(mode) {
@@ -703,39 +725,38 @@
       if (mode === 'pre') fillPreDays();
     }
     function fillPreDays() {
-      const sel = document.getElementById('pre-day'), keep = sel.value; sel.innerHTML = '';
-      for (let i = 0; i <= Math.min(7, +SHOP_HOURS.maxDays || 0); i++) {
-        if (!preSlots(i).length) continue; const inf = vnInfo(nowMs() + i * 86400000);
-        sel.insertAdjacentHTML('beforeend', '<option value="' + i + '">' + (i === 0 ? 'Hôm nay' : i === 1 ? 'Ngày mai' : 'Ngày ' + String(inf.d).padStart(2, '0') + '/' + String(inf.m).padStart(2, '0')) + '</option>');
-      }
-      if (keep && sel.querySelector('option[value="' + keep + '"]')) sel.value = keep; fillPreTimes();
+      const sel = document.getElementById('pre-day'), inf = vnInfo(nowMs());
+      sel.innerHTML = '<option value="0">Hôm nay (' + String(inf.d).padStart(2, '0') + '/' + String(inf.m).padStart(2, '0') + ')</option>'; sel.disabled = true;
+      fillPreTimes();
     }
     function fillPreTimes() {
-      const di = +document.getElementById('pre-day').value, t = document.getElementById('pre-time'); t.innerHTML = '';
-      preSlots(di).forEach(m => t.insertAdjacentHTML('beforeend', '<option value="' + m + '">' + hhmm(m) + '</option>'));
+      const t = document.getElementById('pre-time'); t.innerHTML = '';
+      preSlots().forEach(m => t.insertAdjacentHTML('beforeend', '<option value="' + m + '">' + hhmm(m) + '</option>'));
     }
     function initWhenBox() {
       const h = SHOP_HOURS, box = document.getElementById('when-box'); if (!box) return true;
       if (!h.enabled) { box.style.display = 'none'; return true; }
-      const open = isShopOpenNow(), canPre = !!h.preorder;
-      if (!open && !canPre) { alert('🔴 Quán đang đóng cửa. Giờ mở cửa: ' + hhmm(h.openMin) + ' – ' + hhmm(h.closeMin) + '. Khách iu quay lại sau nha!'); return false; }
-      box.style.display = 'block'; document.getElementById('when-now').disabled = !open;
+      const st = shopState(), open = st === 'open', canPre = !!h.preorder && preSlots().length > 0;
+      if (!open && !canPre) { alert(closedMsg(st)); return false; }
+      box.style.display = 'block';
+      const nowR = document.getElementById('when-now'); nowR.disabled = !open; nowR.parentElement.style.opacity = open ? '' : '.45';
       document.getElementById('when-pre-row').style.display = canPre ? '' : 'none';
-      document.getElementById('when-note').innerText = open ? ('Đặt trước: chọn giờ trong khung ' + hhmm(h.openMin) + ' – ' + hhmm(h.closeMin) + ', cách hiện tại tối thiểu ' + (+h.leadMin || 0) + ' phút.') : 'Quán đang đóng cửa nên chỉ nhận ĐẶT TRƯỚC (giờ hẹn trong khung ' + hhmm(h.openMin) + ' – ' + hhmm(h.closeMin) + ').';
+      document.getElementById('when-note').innerText = open
+        ? (canPre ? 'Đặt trước: chọn giờ hẹn trong hôm nay (đến ' + hhmm(h.closeMin) + '), cách hiện tại tối thiểu ' + (+h.leadMin || 0) + ' phút.' : 'Hiện đã hết khung giờ đặt trước trong hôm nay.')
+        : '🔴 Quán chưa mở cửa. Khách iu vui lòng đặt sau ' + hhmm(h.openMin) + ' hoặc chọn giờ hẹn bên dưới (chỉ nhận đặt trước trong hôm nay).';
       setWhen(open ? 'now' : 'pre');
-      if (!open && !document.getElementById('pre-time').options.length) { alert('Hiện chưa còn khung giờ đặt trước phù hợp. Khách iu vui lòng quay lại sau nha!'); return false; }
       return true;
     }
     function whenFields() {
       if (!SHOP_HOURS.enabled) return { fields: { orderType: 'now' } };
       if (document.getElementById('when-pre').checked) {
-        const dv = document.getElementById('pre-day').value, tv = document.getElementById('pre-time').value;
-        if (dv === '' || tv === '') return { error: 'Vui lòng chọn ngày và giờ hẹn để đặt trước!' };
-        const inf = vnInfo(nowMs() + (+dv) * 86400000), at = vnDayStart(inf.y, inf.m, inf.d) + (+tv) * 60000;
+        const tv = document.getElementById('pre-time').value;
+        if (tv === '') return { error: 'Vui lòng chọn giờ hẹn để đặt trước!' };
+        const inf = vnInfo(nowMs()), at = vnDayStart(inf.y, inf.m, inf.d) + (+tv) * 60000;
         if (at < nowMs() + (+SHOP_HOURS.leadMin || 0) * 60000 - 60000) return { error: 'Giờ hẹn đã qua hoặc quá sát, vui lòng chọn lại giờ khác.' };
         return { fields: { orderType: 'preorder', pickupAt: at, pickupLabel: hhmm(+tv) + ' · ' + String(inf.d).padStart(2, '0') + '/' + String(inf.m).padStart(2, '0') } };
       }
-      if (!isShopOpenNow()) return { error: 'Quán đang đóng cửa, vui lòng chọn ĐẶT TRƯỚC.' };
+      if (!isShopOpenNow()) return { error: closedMsg(shopState()) };
       return { fields: { orderType: 'now' } };
     }
 
@@ -858,7 +879,7 @@
       // Render danh mục ngang
       const scrollBox = document.getElementById('category-scroll');
       scrollBox.innerHTML = categories.map(cat => `
-        <button class="cat-btn ${cat === currentCat ? 'active' : ''}" onclick="setCat('${cat}')">${cat}</button>
+        <button class="cat-btn ${cat === currentCat ? 'active' : ''}" data-cat="${esc(cat)}" onclick="setCat(this.dataset.cat)">${esc(cat)}</button>
       `).join('');
 
       // Render danh sách món theo danh mục đang chọn
@@ -869,7 +890,7 @@
         const safeName = (i.name || '').replace(/'/g, "\\'");
         const price = Number(i.price || 0);
         const lp = bestLinePromoFor(i.id, price, 1);
-        const imgSrc = liveImages[i._k] || liveImages[i.id];
+        const imgSrc = safeImg(liveImages[i._k] || liveImages[i.id]);
         const img = imgSrc ? `<div class="item-thumb"><img loading="lazy" alt="" src="${imgSrc}"></div>` : '';
         const desc = i.desc ? `<div class="item-desc" title="Bấm để xem đủ" onclick="this.classList.toggle('open')">${esc(i.desc)}</div>` : '';
         const chip = lp.promo ? `<span class="promo-chip">🏷️ -${promoValueText(lp.promo)}</span>` : '';
@@ -881,11 +902,11 @@
             ${img}
             <div class="item-body">
               ${chip}
-              <div class="item-name">${i.name}</div>
+              <div class="item-name">${esc(i.name)}</div>
               ${desc}
               <div class="item-footer">
                 ${priceHtml}
-                <button class="btn-add" onclick="addToCart('${i.id}', '${safeName}', ${price}, '${i.type || 'food'}')">+ Thêm</button>
+                <button class="btn-add" data-id="${esc(i.id)}" data-name="${esc(i.name || '')}" data-type="${esc(i.type || 'food')}" onclick="addToCart(this.dataset.id, this.dataset.name, ${price}, this.dataset.type)">+ Thêm</button>
               </div>
             </div>
           </div>
@@ -971,7 +992,7 @@
         html += `
           <div class="cart-item-box">
             <div class="cart-item-row">
-              <span>${item.name} ${L.lineDiscount > 0 ? `(<s style="color:#999;">${fmt(L.gross)}đ</s> <span style="color:#e65100;">${fmt(L.gross - L.lineDiscount)}đ</span>)<br><small style="color:#e65100;">🏷️ ${esc(L.promoName)}</small>` : `(${fmt(L.gross)}đ)`}</span>
+              <span>${esc(item.name)} ${L.lineDiscount > 0 ? `(<s style="color:#999;">${fmt(L.gross)}đ</s> <span style="color:#e65100;">${fmt(L.gross - L.lineDiscount)}đ</span>)<br><small style="color:#e65100;">🏷️ ${esc(L.promoName)}</small>` : `(${fmt(L.gross)}đ)`}</span>
               <div>
                 <button class="qty-btn" onclick="changeQty(${idx}, -1)">-</button>
                 <span style="margin:0 6px;">${item.qty}</span>
@@ -980,7 +1001,7 @@
             </div>
             <div class="note-chips">
               ${activeChips.map(chip => `
-                <span class="chip ${item.notes.includes(chip)?'selected':''}" onclick="toggleNoteByIndex(${idx}, '${chip}')">${chip}</span>
+                <span class="chip ${item.notes.includes(chip)?'selected':''}" data-note="${esc(chip)}" onclick="toggleNoteByIndex(${idx}, this.dataset.note)">${esc(chip)}</span>
               `).join('')}
             </div>
           </div>
@@ -1098,10 +1119,11 @@
 
     async function submitOrderToPOS() {
       if (ORDER_BLOCK) { alert('⛔ Quán đang tạm ngưng nhận đơn online. Khách iu vui lòng quay lại sau nha!'); return; }
-      const name = document.getElementById('cust-name').value.trim();
-      const phone = document.getElementById('cust-phone').value.trim();
-      const address = document.getElementById('cust-address').value.trim();
-      const note = document.getElementById('cust-note').value.trim();
+      const clean = (s, n) => String(s == null ? '' : s).replace(/[<>]/g, '').trim().slice(0, n);   // bỏ < > (rules cũng chặn)
+      const name = clean(document.getElementById('cust-name').value, 100);
+      const phone = String(document.getElementById('cust-phone').value || '').replace(/[\s.\-()]/g, '');
+      const address = clean(document.getElementById('cust-address').value, 300);
+      const note = clean(document.getElementById('cust-note').value, 500);
       const wf = whenFields(); if (wf.error) { alert(wf.error); return; }
 
       const needAddress = selectedShippingMethod !== 'pickup';
@@ -1110,6 +1132,8 @@
         return; 
       }
 
+      if (!/^[+]?[0-9]{9,15}$/.test(phone)) { alert('Số điện thoại chưa đúng. Khách iu nhập 9–15 chữ số nha!'); return; }
+      if (cart.some(it => !(it.qty >= 1 && it.qty <= 99))) { alert('Mỗi món đặt tối đa 99 phần nha!'); return; }
       let deliveryType = 'pickup';
       if (selectedShippingMethod === 'self') deliveryType = 'customer_ship';
       else if (selectedShippingMethod === 'shop') deliveryType = 'shop_ship';
@@ -1125,14 +1149,14 @@
         phone: phone,
         address: needAddress ? address : '',
         note: note,
-        items: cart.map((it, i) => ({ id: it.id, name: it.name, price: it.price, type: it.type, qty: it.qty, notes: it.notes,
-          lineDiscount: T.lines[i].lineDiscount || 0, promoName: T.lines[i].promoName || '' })),
-        gifts: gifts,
+        items: cart.map((it, i) => ({ id: clean(it.id, 60), name: clean(it.name, 120), price: Number(it.price) || 0, type: String(it.type || 'food').replace(/[^A-Za-z_]/g, '').slice(0, 20) || 'food', qty: it.qty, notes: (it.notes || []).map(n => clean(n, 60)).slice(0, 20),
+          lineDiscount: T.lines[i].lineDiscount || 0, promoName: clean(T.lines[i].promoName || '', 150) })),
+        gifts: gifts.map(g => clean(g, 120)),
         total: T.total,
         itemsGross: T.itemsGross,
         lineDiscountTotal: T.lineDiscountTotal,
         billDiscount: T.billDiscount,
-        billPromoName: T.billLabel || '',
+        billPromoName: clean(T.billLabel || '', 150),
         deliveryType: deliveryType,
         payMethod: "Chuyển khoản QR (Chờ xác nhận tiền)",
         paymentStatus: 'pending',
@@ -1150,7 +1174,7 @@
           updateCartBar(); 
           closeCheckoutModal();
         } catch(e) {
-          alert("Lỗi gửi đơn hàng: " + e.message);
+          alert(/PERMISSION_DENIED/i.test((e && (e.code || e.message)) || '') ? '⛔ Chưa gửi được đơn. Có thể quán vừa đóng cửa / hết giờ nhận đơn, hoặc đơn có thông tin chưa hợp lệ. Khách iu kiểm tra giờ mở cửa rồi thử lại nha!' : 'Lỗi gửi đơn hàng: ' + e.message);
         }
       }
     }
